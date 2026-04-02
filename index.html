@@ -751,11 +751,11 @@ function renderBody(){
       const showTitle=cardW>32;
       const dateStr=cardDateRange(card);
       const showDates=cardW>80&&dateStr;
-      // For narrow cards where dates are truncated, show full date + comment in native tooltip
-      const tooltipParts=[];
-      if(dateStr)tooltipParts.push(dateStr);
-      if(card.comment)tooltipParts.push(card.comment);
-      const titleAttr=tooltipParts.length?` title="${tooltipParts.join('\n\n')}"`:'';
+      // Native tooltip shows full period + comment (useful when card is narrow)
+      const tipParts=[];
+      if(dateStr)tipParts.push(dateStr);
+      if(card.comment)tipParts.push(card.comment);
+      if(tipParts.length)el.title=tipParts.join('\n\n');
       el.innerHTML=`
         ${showTitle?`<span class="ec-title">${esc(card.title||st.name)}</span>`:''}
         ${showDates?`<span class="ec-dates">${esc(dateStr)}</span>`:''}
@@ -763,17 +763,9 @@ function renderBody(){
         ${isViewMode?'':'<div class="ec-rh" data-cid="'+card.id+'"></div>'}`;
 
       if(isViewMode){
-        // View mode: click opens initiative view modal
         el.style.cursor='pointer';
         el.addEventListener('click',()=>openViewModal(card.initiativeId));
-        // Tooltip with comment
-        if(card.comment){
-          el.addEventListener('mouseenter',e=>showTip(e,card.comment));
-          el.addEventListener('mousemove',moveTip);
-          el.addEventListener('mouseleave',hideTip);
-        }
       } else {
-        // Edit mode: mousedown handles both drag and click (distinguished by movement threshold)
         el.addEventListener('contextmenu',e=>{
           e.preventDefault();e.stopPropagation();
           showCtx(e,[
@@ -782,11 +774,6 @@ function renderBody(){
             {icon:ICONS.del,label:'Excluir card',danger:true,action:()=>confirmDelCard(card.id,el)},
           ]);
         });
-        if(card.comment){
-          el.addEventListener('mouseenter',e=>showTip(e,card.comment));
-          el.addEventListener('mousemove',moveTip);
-          el.addEventListener('mouseleave',hideTip);
-        }
         el.addEventListener('mousedown',e=>onCardDown(e,card.id));
         const rh=el.querySelector('.ec-rh');
         if(rh)rh.addEventListener('mousedown',onResizeDown);

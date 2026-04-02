@@ -308,7 +308,12 @@ body.view-mode .dcol:hover{background:transparent}
 .ec-title{font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;pointer-events:none}
 .ec-dates{font-size:9.5px;font-weight:500;opacity:.72;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%;pointer-events:none;letter-spacing:.1px}
 
-/* ── SLACK FORMAT TABS ── */
+/* ── HIDDEN INITIATIVES ── */
+.hidden-header{display:flex;align-items:center;gap:8px;padding:10px 16px;cursor:pointer;font-size:12px;font-weight:600;color:var(--t3);transition:color .14s,background .14s;user-select:none}
+.hidden-header:hover{color:var(--primary);background:var(--primary-l)}
+.hidden-row{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-top:1px solid var(--bd-l);gap:12px;animation:rowIn .18s ease both}
+.hidden-row-name{font-family:var(--fh);font-size:13px;font-weight:600;color:var(--t3);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hidden-row-actions{display:flex;gap:6px;flex-shrink:0}
 .fmt-tab{font-family:var(--fb);font-size:12px;font-weight:500;padding:5px 12px;border-radius:100px;border:1.5px solid var(--bd);background:var(--bg);color:var(--t2);cursor:pointer;transition:all .14s;white-space:nowrap}
 .fmt-tab:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-l)}
 .fmt-tab.active{background:var(--primary);border-color:var(--primary);color:#fff}
@@ -405,6 +410,14 @@ body.view-mode .dcol:hover{background:transparent}
   <div class="board-body-outer" id="bodyOuter">
     <div class="board">
       <div id="boardBody"></div>
+      <!-- Hidden initiatives accordion -->
+      <div id="hiddenSection" style="display:none;border-top:1px solid var(--bd-l)">
+        <div class="hidden-header" onclick="toggleHiddenSection()" id="hiddenHeader">
+          <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24" id="hiddenChevron"><polyline points="6 9 12 15 18 9"/></svg>
+          <span id="hiddenLabel">Iniciativas ocultas</span>
+        </div>
+        <div id="hiddenList" style="display:none"></div>
+      </div>
       <div class="board-foot">
         <button class="btn" onclick="openInitModal()" style="font-size:12px;height:28px;">
           <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.8" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -566,6 +579,7 @@ function load(){
     const r=localStorage.getItem(SK);
     if(r){S=JSON.parse(r);}
   }catch(e){}
+  migrateCards(); // ensure all cards use startDate/spanDays
 }
 
 /* ─ DATE HELPERS (weekdays only) ─ */
@@ -589,18 +603,96 @@ function isToday(d){const t=new Date();return d.d===t.getDate()&&d.m===t.getMont
 function isMonday(d){return d.dow===1;}
 function todayIdx(){return getDays().findIndex(d=>isToday(d));}
 
-// Returns formatted date range string for a card: "02/04 – 08/04 (5 dias)"
-function cardDateRange(card){
+/* ─ DATE↔ISO HELPERS ─
+   Cards now store startDate (ISO "YYYY-MM-DD") and spanDays (count of visible weekdays).
+   dayIndex is computed at render time from the current getDays() array.
+   Old cards using dayIndex/span are migrated on load.
+─ */
+function isoFromDay(d){return`${d.y}-${String(d.m+1).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;}
+function isoFromDate(dt){return`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;}
+
+// Get pixel left position for a card in the current view. Returns null if not visible.
+function cardLeftPx(card){
   const days=getDays();
-  if(!days.length)return '';
-  const startIdx=Math.max(0,Math.min(Math.round(card.dayIndex),days.length-1));
-  const endIdx=Math.max(startIdx,Math.min(Math.round(card.dayIndex+card.span)-1,days.length-1));
-  const s=days[startIdx],e=days[endIdx];
-  if(!s||!e)return '';
-  const fmt=d=>`${String(d.d).padStart(2,'0')}/${String(d.m+1).padStart(2,'0')}`;
-  const span=endIdx-startIdx+1;
-  if(startIdx===endIdx)return fmt(s)+` (1 dia)`;
-  return `${fmt(s)} – ${fmt(e)} (${span} dias)`;
+  // Find the first visible day >= startDate
+  const iso=card.startDate;
+  let idx=days.findIndex(d=>isoFromDay(d)>=iso);
+  if(idx===-1)return null; // starts after this period
+  // Also check if it's entirely before this period
+  const endIso=cardEndIso(card);
+  if(endIso<isoFromDay(days[0]))return null;
+  return idx*DW+3;
+}
+
+// Width in px for a card in the current view
+function cardWidthPx(card){
+  const days=getDays();
+  const startIso=card.startDate;
+  const endIso=cardEndIso(card);
+  // Visible portion
+  let startIdx=days.findIndex(d=>isoFromDay(d)>=startIso);
+  if(startIdx===-1)startIdx=days.length;
+  let endIdx=days.findLastIndex?days.findLastIndex(d=>isoFromDay(d)<=endIso):
+    (() => { let r=-1; days.forEach((d,i)=>{ if(isoFromDay(d)<=endIso)r=i; }); return r; })();
+  if(endIdx===-1)endIdx=0;
+  const visibleDays=Math.max(1,endIdx-startIdx+1);
+  return visibleDays*DW-5;
+}
+
+// Whether card overlaps current period at all
+function cardIsVisible(card){
+  const days=getDays();
+  if(!days.length)return false;
+  const periodStart=isoFromDay(days[0]);
+  const periodEnd=isoFromDay(days[days.length-1]);
+  const endIso=cardEndIso(card);
+  return card.startDate<=periodEnd && endIso>=periodStart;
+}
+
+// Compute end ISO date from startDate + spanDays (business days)
+function cardEndIso(card){
+  const spanDays=Math.max(1,Math.round(card.spanDays||1));
+  let dt=new Date(card.startDate+'T12:00:00');
+  let count=0;
+  while(count<spanDays-1){
+    dt.setDate(dt.getDate()+1);
+    if(dt.getDay()!==0&&dt.getDay()!==6)count++;
+  }
+  // skip forward past any weekend landing
+  while(dt.getDay()===0||dt.getDay()===6)dt.setDate(dt.getDate()+1);
+  return isoFromDate(dt);
+}
+
+// Formatted date range string for a card
+function cardDateRange(card){
+  if(!card.startDate)return '';
+  const endIso=cardEndIso(card);
+  const fmt=iso=>`${iso.slice(8)}/${iso.slice(5,7)}`;
+  const spanDays=Math.max(1,Math.round(card.spanDays||1));
+  if(spanDays===1)return`${fmt(card.startDate)} (1 dia)`;
+  return`${fmt(card.startDate)} – ${fmt(endIso)} (${spanDays} dias)`;
+}
+
+function cardEndDate(card){
+  if(!card.startDate)return '';
+  const endIso=cardEndIso(card);
+  return`${endIso.slice(8)}/${endIso.slice(5,7)}`;
+}
+
+// Migrate old cards (dayIndex/span) → startDate/spanDays
+function migrateCards(){
+  const days=getDays();
+  S.cards=S.cards.map(card=>{
+    if(card.startDate)return card; // already migrated
+    const idx=Math.max(0,Math.min(Math.round(card.dayIndex||0),days.length-1));
+    const d=days[idx];
+    if(!d)return{...card,startDate:isoFromDate(new Date()),spanDays:5};
+    return{
+      ...card,
+      startDate:isoFromDay(d),
+      spanDays:Math.max(1,Math.round(card.span||5)),
+    };
+  });
 }
 
 /* ─ CSS VAR ─ */
@@ -716,7 +808,9 @@ function renderHdr(){
 function renderBody(){
   const days=getDays(),body=document.getElementById('boardBody');body.innerHTML='';
   const ti=todayIdx();
-  S.initiatives.forEach((init,ri)=>{
+  // Only show visible (non-hidden) initiatives
+  const visible=S.initiatives.filter(i=>!i.hidden);
+  visible.forEach((init,ri)=>{
     const row=document.createElement('div');row.className='row';row.style.animationDelay=`${ri*.05}s`;
     row.dataset.initId=init.id;
 
@@ -738,6 +832,7 @@ function renderBody(){
         showCtx(e,[
           {icon:ICONS.edit,label:'Editar iniciativa',action:()=>openInitModal(init.id)},
           {icon:ICONS.copy,label:'Duplicar iniciativa',action:()=>duplicateInitiative(init.id)},
+          {icon:ICONS.hide,label:'Ocultar iniciativa',action:()=>hideInitiative(init.id)},
           {div:true},
           {icon:ICONS.del,label:'Excluir iniciativa',danger:true,action:()=>confirmDelInit(init.id,label)},
         ]);
@@ -776,11 +871,13 @@ function renderBody(){
     // Cards
     S.cards.filter(c=>c.initiativeId===init.id).forEach(card=>{
       const st=S.stages.find(s=>s.id===card.stageId);if(!st)return;
-      const span=Math.max(card.span,0.3);
-      const cardW=span*DW-5;
+      if(!cardIsVisible(card))return; // not in this period
+      const leftPx=cardLeftPx(card);
+      if(leftPx===null)return;
+      const cardW=Math.max(10,cardWidthPx(card));
       const el=document.createElement('div');
       el.className='ec';el.id=`c-${card.id}`;el.dataset.cardId=card.id;
-      el.style.cssText=`left:${card.dayIndex*DW+3}px;width:${cardW}px;background:${st.bg};border-color:${st.border};color:${st.text}`;
+      el.style.cssText=`left:${leftPx}px;width:${cardW}px;background:${st.bg};border-color:${st.border};color:${st.text}`;
       const showTitle=cardW>32;
       const dateStr=cardDateRange(card);
       const showDates=cardW>80&&dateStr;
@@ -823,6 +920,7 @@ function renderBody(){
   if(!isViewMode){
     document.querySelectorAll('.col-resize').forEach(h=>setupColResize(h));
   }
+  renderHiddenSection();
 }
 
 /* ─ SCROLL SYNC ─ */
@@ -963,7 +1061,10 @@ function closeDDOut(e){if(!document.getElementById('dd').contains(e.target))clos
 function createCard(stageId){
   if(!pCreate)return;
   const st=S.stages.find(s=>s.id===stageId);
-  S.cards.push({id:'c'+Date.now(),initiativeId:pCreate.initiativeId,stageId,dayIndex:pCreate.dayIndex,span:5,title:st?st.name:'',comment:''});
+  const days=getDays();
+  const d=days[Math.min(pCreate.dayIndex,days.length-1)];
+  const startDate=d?isoFromDay(d):isoFromDate(new Date());
+  S.cards.push({id:'c'+Date.now(),initiativeId:pCreate.initiativeId,stageId,startDate,spanDays:5,title:st?st.name:'',comment:''});
   pCreate=null;save();render();
 }
 
@@ -973,48 +1074,51 @@ const DRAG_THRESHOLD=5; // px movement needed before drag starts
 
 function cancelDrag(){
   if(!dragging)return;
+  const card=S.cards.find(c=>c.id===dragging.cid);
+  if(card&&dragging.origStartDate)card.startDate=dragging.origStartDate;
   const el=document.getElementById(`c-${dragging.cid}`);
-  if(el){el.classList.remove('dragging');el.style.left=(dragging.origDay*DW+3)+'px';}
+  if(el)el.classList.remove('dragging');
   dragging=null;
 }
 
 function onCardDown(e, cardId){
   if(e.target.closest('.ec-rh')||e.button!==0)return;
   const el=e.currentTarget,cid=el.dataset.cardId,card=S.cards.find(c=>c.id===cid);if(!card)return;
-  const sx=e.clientX,sy=e.clientY,sd=card.dayIndex;
-  let started=false;
   const days=getDays();
+  const sx=e.clientX;
+  const origStartDate=card.startDate;
+  // Find the original start index in current days array
+  const origIdx=Math.max(0,days.findIndex(d=>isoFromDay(d)>=card.startDate));
+  let started=false;
 
   function mv(e){
     if(!started){
-      const dx=Math.abs(e.clientX-sx),dy=Math.abs(e.clientY-sy);
-      if(dx<DRAG_THRESHOLD&&dy<DRAG_THRESHOLD)return;
+      const dx=Math.abs(e.clientX-sx),dy=0;
+      if(dx<DRAG_THRESHOLD)return;
       started=true;
-      dragging={cid,origDay:sd};
+      dragging={cid,origStartDate};
       el.classList.add('dragging');
       hideTip();
     }
-    const nd=Math.max(0,Math.min(sd+Math.round((e.clientX-sx)/DW),days.length-1));
-    if(nd!==card.dayIndex){
-      card.dayIndex=nd;
+    const delta=Math.round((e.clientX-sx)/DW);
+    const newIdx=Math.max(0,Math.min(origIdx+delta,days.length-1));
+    const newDay=days[newIdx];
+    if(newDay){
+      card.startDate=isoFromDay(newDay);
       const el2=document.getElementById(`c-${cid}`);
-      if(el2)el2.style.left=(nd*DW+3)+'px';
+      if(el2)el2.style.left=(newIdx*DW+3)+'px';
     }
   }
   function up(){
     document.removeEventListener('mousemove',mv);
     document.removeEventListener('mouseup',up);
     if(!started){
-      // Pure click — open edit modal
       if(cardId)openCardModal(cardId);
       return;
     }
-    // Clean up drag state BEFORE render() destroys this element
     dragging=null;
-    const elNow=document.getElementById(`c-${cid}`);
-    if(elNow)elNow.classList.remove('dragging');
-    save();
-    render();
+    el.classList.remove('dragging');
+    save();render();
   }
   document.addEventListener('mousemove',mv);
   document.addEventListener('mouseup',up);
@@ -1024,13 +1128,19 @@ function onCardDown(e, cardId){
 function onResizeDown(e){
   e.preventDefault();e.stopPropagation();
   const cid=e.currentTarget.dataset.cid,card=S.cards.find(c=>c.id===cid);if(!card)return;
-  const sx=e.clientX,ss=card.span;
-  const days=getDays();
+  const sx=e.clientX,origSpan=card.spanDays||5;
   function mv(e){
-    card.span=Math.max(0.3,Math.min(ss+(e.clientX-sx)/DW,days.length-card.dayIndex));
-    const el=document.getElementById(`c-${cid}`);if(el)el.style.width=(Math.max(card.span,0.3)*DW-5)+'px';
+    const delta=Math.round((e.clientX-sx)/DW);
+    card.spanDays=Math.max(1,origSpan+delta);
+    const el=document.getElementById(`c-${cid}`);
+    if(el)el.style.width=(card.spanDays*DW-5)+'px';
   }
-  function up(){card.span=Math.max(0.3,card.span);save();render();document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);}
+  function up(){
+    card.spanDays=Math.max(1,card.spanDays||1);
+    save();render();
+    document.removeEventListener('mousemove',mv);
+    document.removeEventListener('mouseup',up);
+  }
   document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
 }
 
@@ -1251,7 +1361,51 @@ const ICONS={
   edit:`<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
   del:`<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4h6v2"/></svg>`,
   copy:`<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`,
+  hide:`<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`,
 };
+
+function hideInitiative(iid){
+  const i=S.initiatives.find(x=>x.id===iid);
+  if(i){i.hidden=true;save();render();}
+}
+function showInitiative(iid){
+  const i=S.initiatives.find(x=>x.id===iid);
+  if(i){i.hidden=false;save();render();}
+}
+
+let hiddenSectionOpen=false;
+function toggleHiddenSection(){
+  hiddenSectionOpen=!hiddenSectionOpen;
+  document.getElementById('hiddenList').style.display=hiddenSectionOpen?'':'none';
+  document.getElementById('hiddenChevron').style.transform=hiddenSectionOpen?'rotate(180deg)':'';
+}
+
+function renderHiddenSection(){
+  const hidden=S.initiatives.filter(i=>i.hidden);
+  const sec=document.getElementById('hiddenSection');
+  const list=document.getElementById('hiddenList');
+  const label=document.getElementById('hiddenLabel');
+  if(!hidden.length){sec.style.display='none';return;}
+  sec.style.display='';
+  label.textContent=`Iniciativas ocultas (${hidden.length})`;
+  list.innerHTML='';
+  hidden.forEach(init=>{
+    const row=document.createElement('div');row.className='hidden-row';
+    row.innerHTML=`
+      <div class="hidden-row-name">${esc(init.name)}</div>
+      <div class="hidden-row-actions">
+        <button class="btn" style="height:26px;font-size:11px" onclick="showInitiative('${init.id}')">
+          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          Mostrar
+        </button>
+        <button class="btn btn-d" style="height:26px;font-size:11px" onclick="confirmDelInit('${init.id}',this)">
+          <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4h6v2"/></svg>
+          Excluir
+        </button>
+      </div>`;
+    list.appendChild(row);
+  });
+}
 
 function duplicateInitiative(iid){
   const src=S.initiatives.find(i=>i.id===iid);if(!src)return;
@@ -1308,29 +1462,17 @@ function closePopOut(e){if(!document.getElementById('pop').contains(e.target))cl
 const MNpt=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DISCLAIMER='\n\n_Lembrando que isso é uma previsão e os prazos podem mudar durante o processo_ :wink:';
 
-// Helper: get end date string "dd/mm" from a card
-function cardEndDate(card){
-  const days=getDays();
-  const endIdx=Math.max(0,Math.min(Math.round(card.dayIndex+card.span)-1,days.length-1));
-  const d=days[endIdx];if(!d)return '';
-  return`${String(d.d).padStart(2,'0')}/${String(d.m+1).padStart(2,'0')}`;
-}
-
 // Helper: next card per initiative (closest end date from today)
 function nextCardPerInit(){
   const today=new Date();
-  const days=getDays();
   const result=[];
-  S.initiatives.forEach(init=>{
-    const cards=S.cards.filter(c=>c.initiativeId===init.id);
+  S.initiatives.filter(i=>!i.hidden).forEach(init=>{
+    const cards=S.cards.filter(c=>c.initiativeId===init.id&&c.startDate);
     if(!cards.length)return;
-    // Sort by end date, pick the first one that hasn't ended yet, else the last one
-    const sorted=[...cards].sort((a,b)=>a.dayIndex+a.span-(b.dayIndex+b.span));
-    const upcoming=sorted.find(c=>{
-      const endIdx=Math.round(c.dayIndex+c.span)-1;
-      const d=days[Math.min(endIdx,days.length-1)];
-      return d&&new Date(d.y,d.m,d.d)>=today;
-    });
+    // Sort by end date, pick first that hasn't ended yet, else last
+    const sorted=[...cards].sort((a,b)=>cardEndIso(a).localeCompare(cardEndIso(b)));
+    const todayIso=isoFromDate(today);
+    const upcoming=sorted.find(c=>cardEndIso(c)>=todayIso);
     const card=upcoming||sorted[sorted.length-1];
     const st=S.stages.find(s=>s.id===card.stageId);
     result.push({init,card,st});

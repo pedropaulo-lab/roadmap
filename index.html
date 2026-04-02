@@ -61,6 +61,8 @@ body{font-family:var(--fb);background:var(--bg-l);color:var(--t1);min-height:100
 .pill-del{display:none;margin-left:3px;font-size:10px;cursor:pointer;opacity:.5;padding:1px 3px;border-radius:3px;transition:opacity .14s,background .14s;line-height:1}
 .pill:hover .pill-del{display:inline}
 .pill-del:hover{opacity:1;background:rgba(0,0,0,.12)}
+.pill-name{cursor:text;border-radius:2px;transition:background .12s}
+.pill-name:hover{background:rgba(0,0,0,.08)}
 .pill-add{padding:3px 10px;border-radius:100px;font-size:11.5px;font-weight:500;color:var(--primary);border:1.5px dashed var(--primary-b);background:transparent;cursor:pointer;flex-shrink:0;transition:background .14s,transform .14s;font-family:var(--fb);animation:chipIn .3s ease both}
 .pill-add:hover{background:var(--primary-l);transform:scale(1.05)}
 
@@ -444,8 +446,21 @@ body.view-mode .dcol:hover{background:transparent}
       <div class="ti-ico"><svg width="14" height="14" fill="none" stroke="var(--primary)" stroke-width="2.2" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></div>
       Editar card
     </div>
+    <!-- Period display (read-only) -->
+    <div id="cardPeriodRow" style="display:none;margin-bottom:16px">
+      <div style="font-size:10px;font-weight:700;color:var(--t4);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">Período</div>
+      <div id="cardPeriodVal" style="display:inline-flex;align-items:center;gap:7px;background:var(--bg-l);border:1px solid var(--bd-l);border-radius:var(--r3);padding:7px 12px;font-size:13px;font-weight:500;color:var(--t2)">
+        <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 4v5"/></svg>
+        <span id="cardPeriodText"></span>
+      </div>
+    </div>
     <div class="f"><label>Etapa</label><div class="sp" id="stagePicker"></div></div>
     <div class="f"><label>Comentário</label><textarea class="ta" id="cardCmt" placeholder="Contexto, links, observações..."></textarea></div>
+    <!-- Comment preview (shown when there's already a comment, in view below) -->
+    <div id="cardCmtPreviewRow" style="display:none;margin-top:-8px;margin-bottom:16px">
+      <div style="font-size:10px;font-weight:700;color:var(--t4);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px">Comentário atual</div>
+      <div id="cardCmtPreview" style="font-size:13px;color:var(--t2);background:var(--bg-l);border:1px solid var(--bd-l);border-radius:var(--r3);padding:10px 12px;line-height:1.6;white-space:pre-wrap"></div>
+    </div>
     <div class="mfoot">
       <button class="btn" onclick="closeCardModal()">Cancelar</button>
       <button class="btn btn-p" onclick="saveCard()">Salvar</button>
@@ -581,7 +596,44 @@ function renderLeg(){
   S.stages.forEach((s,i)=>{
     const el=document.createElement('span');el.className='pill';
     el.style.cssText=`background:${s.bg};border-color:${s.border};color:${s.text};animation-delay:${i*.04}s`;
-    el.innerHTML=`<span class="pill-dot" style="background:${s.border}"></span>${esc(s.name)}<span class="pill-del" onclick="confirmDelStage('${s.id}',this)">✕</span>`;
+
+    const nameSpan=document.createElement('span');
+    nameSpan.className='pill-name';
+    nameSpan.textContent=s.name;
+    nameSpan.title='Clique para renomear';
+    nameSpan.style.cursor='text';
+
+    // Click on name → inline edit
+    nameSpan.addEventListener('click',e=>{
+      e.stopPropagation();
+      if(isViewMode)return;
+      const inp=document.createElement('input');
+      inp.value=s.name;
+      inp.style.cssText=`background:transparent;border:none;outline:none;font:inherit;color:inherit;width:${Math.max(60,s.name.length*8)}px;min-width:40px;max-width:160px;padding:0;`;
+      nameSpan.replaceWith(inp);
+      inp.focus();inp.select();
+      function commit(){
+        const v=inp.value.trim();
+        if(v&&v!==s.name){s.name=v;save();}
+        renderLeg(); // re-render to restore pill
+      }
+      inp.addEventListener('blur',commit);
+      inp.addEventListener('keydown',e2=>{
+        if(e2.key==='Enter'){inp.blur();}
+        if(e2.key==='Escape'){inp.value=s.name;inp.blur();}
+        e2.stopPropagation();
+      });
+    });
+
+    const delSpan=document.createElement('span');
+    delSpan.className='pill-del';
+    delSpan.textContent='✕';
+    delSpan.onclick=(e)=>{e.stopPropagation();confirmDelStage(s.id,delSpan);};
+
+    el.appendChild(document.createElement('span')).className='pill-dot';
+    el.querySelector('.pill-dot').style.background=s.border;
+    el.appendChild(nameSpan);
+    el.appendChild(delSpan);
     b.appendChild(el);
   });
   const a=document.createElement('button');a.className='pill-add';a.textContent='+ Nova etapa';a.onclick=openStageModal;b.appendChild(a);
@@ -699,6 +751,11 @@ function renderBody(){
       const showTitle=cardW>32;
       const dateStr=cardDateRange(card);
       const showDates=cardW>80&&dateStr;
+      // For narrow cards where dates are truncated, show full date + comment in native tooltip
+      const tooltipParts=[];
+      if(dateStr)tooltipParts.push(dateStr);
+      if(card.comment)tooltipParts.push(card.comment);
+      const titleAttr=tooltipParts.length?` title="${tooltipParts.join('\n\n')}"`:'';
       el.innerHTML=`
         ${showTitle?`<span class="ec-title">${esc(card.title||st.name)}</span>`:''}
         ${showDates?`<span class="ec-dates">${esc(dateStr)}</span>`:''}
@@ -900,6 +957,15 @@ function onResizeDown(e){
 let editCid=null;
 function openCardModal(cid){
   editCid=cid;const card=S.cards.find(c=>c.id===cid);if(!card)return;
+
+  // Period row
+  const dr=cardDateRange(card);
+  const periodRow=document.getElementById('cardPeriodRow');
+  const periodText=document.getElementById('cardPeriodText');
+  if(dr){periodText.textContent=dr;periodRow.style.display='';}
+  else{periodRow.style.display='none';}
+
+  // Stage picker
   const sp=document.getElementById('stagePicker');sp.innerHTML='';
   S.stages.forEach(s=>{
     const o=document.createElement('div');o.className='so'+(s.id===card.stageId?' sel':'');
@@ -908,7 +974,16 @@ function openCardModal(cid){
     o.onclick=()=>{sp.querySelectorAll('.so').forEach(x=>x.classList.remove('sel'));o.classList.add('sel');};
     sp.appendChild(o);
   });
-  document.getElementById('cardCmt').value=card.comment||'';
+
+  // Comment textarea + preview of existing comment
+  const cmt=card.comment||'';
+  document.getElementById('cardCmt').value=cmt;
+  const previewRow=document.getElementById('cardCmtPreviewRow');
+  const previewEl=document.getElementById('cardCmtPreview');
+  // Hide preview — the textarea itself shows/edits the comment
+  previewRow.style.display='none';
+  previewEl.textContent='';
+
   openOv('cardOv');
 }
 function closeCardModal(){closeOv('cardOv');editCid=null;}

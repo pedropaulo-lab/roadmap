@@ -178,6 +178,24 @@ body.view-mode .dcol:hover{background:transparent}
 .row-bar{width:3px;height:26px;border-radius:2px;background:linear-gradient(180deg,var(--primary),var(--primary-b));flex-shrink:0;transition:height .2s}
 .row:hover .row-bar{height:34px}
 .row-nm{font-family:var(--fh);font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;pointer-events:none}
+/* Row drag handle */
+.row-drag-handle{
+  display:flex;align-items:center;justify-content:center;
+  width:16px;flex-shrink:0;cursor:grab;opacity:0;
+  transition:opacity .14s;color:var(--t4);pointer-events:auto;
+  padding-right:2px;
+}
+.row-drag-handle:active{cursor:grabbing}
+.row:hover .row-drag-handle{opacity:1}
+/* Ghost row while dragging */
+.row.row-dragging{opacity:.4;pointer-events:none}
+/* Drop indicator line */
+.row-drop-indicator{
+  height:2px;background:var(--primary);border-radius:2px;
+  margin:0;pointer-events:none;
+  box-shadow:0 0 6px rgba(107,105,173,.5);
+  display:none;
+}
 
 /* Column resize handle */
 .col-resize{
@@ -290,7 +308,10 @@ body.view-mode .dcol:hover{background:transparent}
 .ec-title{font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;pointer-events:none}
 .ec-dates{font-size:9.5px;font-weight:500;opacity:.72;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%;pointer-events:none;letter-spacing:.1px}
 
-/* ── SLACK MODAL ── */
+/* ── SLACK FORMAT TABS ── */
+.fmt-tab{font-family:var(--fb);font-size:12px;font-weight:500;padding:5px 12px;border-radius:100px;border:1.5px solid var(--bd);background:var(--bg);color:var(--t2);cursor:pointer;transition:all .14s;white-space:nowrap}
+.fmt-tab:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-l)}
+.fmt-tab.active{background:var(--primary);border-color:var(--primary);color:#fff}
 .slack-textarea{width:100%;padding:12px 14px;border:1.5px solid var(--bd);border-radius:var(--r3);font-family:'Courier Prime',monospace;font-size:12.5px;color:var(--t1);background:#f8f8fc;outline:none;resize:vertical;min-height:200px;line-height:1.65;transition:border-color .14s,box-shadow .14s}
 .slack-textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(107,105,173,.17)}
 .copy-success{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#16a34a;font-weight:600;opacity:0;transition:opacity .2s}
@@ -326,13 +347,16 @@ body.view-mode .dcol:hover{background:transparent}
 
 <!-- SLACK UPDATE MODAL -->
 <div class="ov" id="slackOv">
-  <div class="modal" style="width:520px">
+  <div class="modal" style="width:560px">
     <button class="mclose" onclick="closeOv('slackOv')">✕</button>
     <div class="modal-ti">
       <div class="ti-ico"><svg width="14" height="14" fill="none" stroke="var(--primary)" stroke-width="2.2" viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></div>
       Atualizar time
     </div>
-    <p style="font-size:12px;color:var(--t3);margin-bottom:14px;margin-top:-10px">Texto formatado para enviar no Slack. Edite à vontade antes de copiar.</p>
+    <!-- Format tabs -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px" id="slackFormatTabs"></div>
+    <!-- Description -->
+    <p style="font-size:11.5px;color:var(--t3);margin-bottom:10px;line-height:1.5" id="slackFormatDesc"></p>
     <textarea class="slack-textarea" id="slackText" spellcheck="false"></textarea>
     <div class="mfoot">
       <span class="copy-success" id="copySuccess">
@@ -694,6 +718,7 @@ function renderBody(){
   const ti=todayIdx();
   S.initiatives.forEach((init,ri)=>{
     const row=document.createElement('div');row.className='row';row.style.animationDelay=`${ri*.05}s`;
+    row.dataset.initId=init.id;
 
     // Label
     const label=document.createElement('div');label.className='row-label';
@@ -712,6 +737,7 @@ function renderBody(){
         e.preventDefault();
         showCtx(e,[
           {icon:ICONS.edit,label:'Editar iniciativa',action:()=>openInitModal(init.id)},
+          {icon:ICONS.copy,label:'Duplicar iniciativa',action:()=>duplicateInitiative(init.id)},
           {div:true},
           {icon:ICONS.del,label:'Excluir iniciativa',danger:true,action:()=>confirmDelInit(init.id,label)},
         ]);
@@ -720,11 +746,18 @@ function renderBody(){
 
     label.innerHTML=`
       <div class="row-li">
+        ${isViewMode?'':'<div class="row-drag-handle" title="Arrastar para reordenar"><svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="2.5" cy="2.5" r="1.5"/><circle cx="7.5" cy="2.5" r="1.5"/><circle cx="2.5" cy="7" r="1.5"/><circle cx="7.5" cy="7" r="1.5"/><circle cx="2.5" cy="11.5" r="1.5"/><circle cx="7.5" cy="11.5" r="1.5"/></svg></div>'}
         <div class="row-bar"></div>
         <div style="flex:1;min-width:0"><div class="row-nm">${esc(init.name)}</div></div>
       </div>
       ${isViewMode?'':'<div class="col-resize" data-iid="'+init.id+'"></div>'}`;
     row.appendChild(label);
+
+    // Row reorder drag — attach to handle only
+    if(!isViewMode){
+      const handle=label.querySelector('.row-drag-handle');
+      if(handle)handle.addEventListener('mousedown',e=>onRowDragStart(e,init.id,row));
+    }
 
     // Cells
     const cells=document.createElement('div');cells.className='row-cells';
@@ -816,6 +849,67 @@ function setupColResize(handle){
     function up(){handle.classList.remove('active');save();render();document.removeEventListener('mousemove',mv);document.removeEventListener('mouseup',up);}
     document.addEventListener('mousemove',mv);document.addEventListener('mouseup',up);
   });
+}
+
+/* ─ ROW REORDER DRAG ─ */
+function onRowDragStart(e, initId, rowEl){
+  e.preventDefault();e.stopPropagation();
+  const body=document.getElementById('boardBody');
+  const dragIdx=S.initiatives.findIndex(i=>i.id===initId);
+  let dropBeforeId=null; // id of the init we'll insert before (null = append at end)
+
+  rowEl.classList.add('row-dragging');
+
+  // Drop indicator line
+  const indicator=document.createElement('div');
+  indicator.className='row-drop-indicator';
+
+  function getOtherRows(){
+    return Array.from(body.querySelectorAll('.row')).filter(r=>r!==rowEl);
+  }
+
+  function mv(e){
+    const rows=getOtherRows();
+    if(indicator.parentNode)indicator.parentNode.removeChild(indicator);
+    dropBeforeId=null;
+    let placed=false;
+    for(const r of rows){
+      const rect=r.getBoundingClientRect();
+      if(e.clientY<rect.top+rect.height/2){
+        body.insertBefore(indicator,r);
+        dropBeforeId=r.dataset.initId;
+        placed=true;
+        break;
+      }
+    }
+    if(!placed){
+      body.appendChild(indicator);
+      dropBeforeId=null; // append at end
+    }
+    indicator.style.display='block';
+  }
+
+  function up(){
+    document.removeEventListener('mousemove',mv);
+    document.removeEventListener('mouseup',up);
+    rowEl.classList.remove('row-dragging');
+    if(indicator.parentNode)indicator.parentNode.removeChild(indicator);
+
+    // Reorder
+    const arr=[...S.initiatives];
+    const [item]=arr.splice(dragIdx,1);
+    if(dropBeforeId){
+      const targetIdx=arr.findIndex(i=>i.id===dropBeforeId);
+      arr.splice(targetIdx<0?arr.length:targetIdx,0,item);
+    } else {
+      arr.push(item);
+    }
+    S.initiatives=arr;
+    save();render();
+  }
+
+  document.addEventListener('mousemove',mv);
+  document.addEventListener('mouseup',up);
 }
 
 /* ─ NAVIGATE ─ */
@@ -1156,7 +1250,29 @@ function confirmDelStage(sid,btn){
 const ICONS={
   edit:`<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
   del:`<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6m3 0V4h6v2"/></svg>`,
+  copy:`<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`,
 };
+
+function duplicateInitiative(iid){
+  const src=S.initiatives.find(i=>i.id===iid);if(!src)return;
+  const newId='i'+Date.now();
+  // Deep-clone initiative
+  S.initiatives.push({
+    id:newId,
+    name:src.name+' (cópia)',
+    links:JSON.parse(JSON.stringify(src.links||{})),
+    extraLinks:JSON.parse(JSON.stringify(src.extraLinks||[])),
+  });
+  // Deep-clone cards belonging to this initiative
+  S.cards.filter(c=>c.initiativeId===iid).forEach(card=>{
+    S.cards.push({
+      ...card,
+      id:'c'+Date.now()+Math.random().toString(36).slice(2,6),
+      initiativeId:newId,
+    });
+  });
+  save();render();
+}
 function showCtx(e,items){
   closeCtx();const m=document.getElementById('ctx');m.innerHTML='';
   items.forEach(item=>{
@@ -1188,37 +1304,131 @@ function closePop(){document.getElementById('pop').classList.remove('open');}
 function closePopOut(e){if(!document.getElementById('pop').contains(e.target))closePop();}
 
 /* ─ SLACK UPDATE MODAL ─ */
-function buildSlackText(){
-  const now=new Date();
-  const months=getMonths();
-  const days=getDays();
-  const MNpt=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+/* ─ SLACK UPDATE MODAL ─ */
+const MNpt=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const DISCLAIMER='\n\n_Lembrando que isso é uma previsão e os prazos podem mudar durante o processo_ :wink:';
 
-  // Lines: one per card in the current period, grouped by initiative
-  const lines=[];
+// Helper: get end date string "dd/mm" from a card
+function cardEndDate(card){
+  const days=getDays();
+  const endIdx=Math.max(0,Math.min(Math.round(card.dayIndex+card.span)-1,days.length-1));
+  const d=days[endIdx];if(!d)return '';
+  return`${String(d.d).padStart(2,'0')}/${String(d.m+1).padStart(2,'0')}`;
+}
+
+// Helper: next card per initiative (closest end date from today)
+function nextCardPerInit(){
+  const today=new Date();
+  const days=getDays();
+  const result=[];
   S.initiatives.forEach(init=>{
     const cards=S.cards.filter(c=>c.initiativeId===init.id);
     if(!cards.length)return;
-    cards.forEach(card=>{
-      const st=S.stages.find(s=>s.id===card.stageId);if(!st)return;
-      const dr=cardDateRange(card);
-      const period=dr?` (${dr})`:'';
-      lines.push(`• *${init.name}*: ${card.title||st.name}${period}`);
+    // Sort by end date, pick the first one that hasn't ended yet, else the last one
+    const sorted=[...cards].sort((a,b)=>a.dayIndex+a.span-(b.dayIndex+b.span));
+    const upcoming=sorted.find(c=>{
+      const endIdx=Math.round(c.dayIndex+c.span)-1;
+      const d=days[Math.min(endIdx,days.length-1)];
+      return d&&new Date(d.y,d.m,d.d)>=today;
     });
+    const card=upcoming||sorted[sorted.length-1];
+    const st=S.stages.find(s=>s.id===card.stageId);
+    result.push({init,card,st});
   });
+  return result;
+}
 
-  const monthLabel=MNpt[months[0].m];
-  const text=
-`Pessoal, atualizando vocês sobre as iniciativas em andamento e na esteira de design em ${monthLabel}:
+const SLACK_FORMATS=[
+  {
+    id:'completo',
+    label:'Completo',
+    desc:'Todas as etapas com período completo. Ideal para reuniões de sprint ou revisões.',
+    build(){
+      const months=getMonths();
+      const monthLabel=MNpt[months[0].m];
+      const lines=[];
+      S.initiatives.forEach(init=>{
+        const cards=S.cards.filter(c=>c.initiativeId===init.id);
+        if(!cards.length)return;
+        cards.forEach(card=>{
+          const st=S.stages.find(s=>s.id===card.stageId);if(!st)return;
+          const dr=cardDateRange(card);
+          lines.push(`• *${init.name}*: ${card.title||st.name}${dr?' ('+dr+')':''}`);
+        });
+      });
+      return`Pessoal, atualizando vocês sobre as iniciativas em andamento e na esteira de design em ${monthLabel}:\n\n${lines.join('\n')}\n\nQualquer dúvida ou ajustes nas prioridades, só me acionar.${DISCLAIMER}`;
+    }
+  },
+  {
+    id:'proxima',
+    label:'Próxima entrega',
+    desc:'Só a próxima etapa de cada iniciativa com data de término. Rápido e direto.',
+    build(){
+      const items=nextCardPerInit();
+      const lines=items.map(({init,card,st})=>{
+        const end=cardEndDate(card);
+        return`• *${init.name}*: ${card?.title||st?.name||'—'}${end?' até '+end:''}`;
+      });
+      return`Oi pessoal! Atualização rápida sobre o que estamos entregando:\n\n${lines.join('\n')}\n\nQualquer dúvida é só chamar.${DISCLAIMER}`;
+    }
+  },
+  {
+    id:'resumido',
+    label:'Resumido',
+    desc:'Uma linha por iniciativa, sem datas. Para atualizações rápidas no canal.',
+    build(){
+      const items=nextCardPerInit();
+      const lines=items.map(({init,card,st})=>`• *${init.name}* — ${card?.title||st?.name||'em andamento'}`);
+      return`🗓 *Status de design — semana atual*\n\n${lines.join('\n')}\n\nQualquer dúvida ou prioridade nova, me chama.${DISCLAIMER}`;
+    }
+  },
+  {
+    id:'narrativo',
+    label:'Narrativo',
+    desc:'Texto corrido, mais pessoal. Bom para canais com stakeholders ou liderança.',
+    build(){
+      const months=getMonths();
+      const monthLabel=MNpt[months[0].m];
+      const items=nextCardPerInit();
+      const parts=items.map(({init,card,st})=>{
+        const end=cardEndDate(card);
+        const stage=card?.title||st?.name||'em andamento';
+        return`*${init.name}* está em ${stage}${end?' com previsão de entrega até '+end:''}`;
+      });
+      if(!parts.length)return'Nenhuma iniciativa com cards no período atual.';
+      const body=parts.length===1
+        ?parts[0]
+        :parts.slice(0,-1).join(', ')+' e '+parts[parts.length-1];
+      return`Passando para atualizar sobre o design em ${monthLabel}. ${body}. Se tiver dúvidas ou quiser realinhar prioridades, só me acionar.${DISCLAIMER}`;
+    }
+  },
+];
 
-${lines.join('\n')}
+let activeFormatId=SLACK_FORMATS[0].id;
 
-Qualquer dúvida ou ajustes nas prioridades, só me acionar 🙋`;
-  return text;
+function renderSlackTabs(){
+  const tabs=document.getElementById('slackFormatTabs');
+  const desc=document.getElementById('slackFormatDesc');
+  tabs.innerHTML='';
+  SLACK_FORMATS.forEach(fmt=>{
+    const btn=document.createElement('button');
+    btn.className='fmt-tab'+(fmt.id===activeFormatId?' active':'');
+    btn.textContent=fmt.label;
+    btn.onclick=()=>{
+      activeFormatId=fmt.id;
+      renderSlackTabs();
+      document.getElementById('slackText').value=fmt.build();
+    };
+    tabs.appendChild(btn);
+  });
+  const active=SLACK_FORMATS.find(f=>f.id===activeFormatId);
+  if(active)desc.textContent=active.desc;
 }
 
 function openSlackModal(){
-  document.getElementById('slackText').value=buildSlackText();
+  activeFormatId=SLACK_FORMATS[0].id;
+  renderSlackTabs();
+  document.getElementById('slackText').value=SLACK_FORMATS[0].build();
   document.getElementById('copySuccess').classList.remove('show');
   openOv('slackOv');
 }
